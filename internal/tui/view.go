@@ -22,7 +22,8 @@ func (m Model) View() tea.View {
 		Width(m.Layout.MainWidth).
 		Height(m.Layout.InputHeight)
 
-	tableStyle := m.FocusedStyle(m.Styles.Table, m.Focus == FocusRows).
+	tableStyle := m.
+		FocusedStyle(m.Styles.Table, m.Focus == FocusRows).
 		Width(m.Layout.MainWidth).
 		Height(m.Layout.TableHeight)
 

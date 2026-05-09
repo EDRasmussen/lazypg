@@ -6,6 +6,7 @@ import (
 
 	"charm.land/bubbles/v2/table"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -25,7 +26,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "shift+enter", "f5":
 			if err := m.executeQuery(); err != nil {
-				panic("unable to execute query")
+				m.printErr(err)
 			}
 			return m, nil
 
@@ -34,6 +35,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.ColumnMode = true
 				m.resize()
 				m.refreshTableColumns()
+				m.refreshTableRows()
 				return m, nil
 			}
 
@@ -42,6 +44,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.ColumnMode = false
 				m.resize()
 				m.refreshTableColumns()
+				m.refreshTableRows()
 				return m, nil
 			}
 
@@ -62,11 +65,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "tab":
 			m.Focus = nextFocus(m.Focus)
-			m.syncFocus()
-			return m, nil
-
-		case "shift+tab":
-			m.Focus = prevFocus(m.Focus)
 			m.syncFocus()
 			return m, nil
 		}
@@ -91,6 +89,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.Table, cmd = m.Table.Update(msg)
 		cmds = append(cmds, cmd)
+		m.refreshTableRows()
 	}
 
 	return m, tea.Batch(cmds...)
@@ -98,6 +97,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) updateTable(cols []table.Column, rows []table.Row) {
 	m.TableCols = append(m.TableCols[:0], cols...)
+	m.TableRows = cloneRows(rows)
 	if len(m.TableCols) == 0 {
 		m.ColumnMode = false
 		m.FocusedCol = 0
@@ -105,9 +105,8 @@ func (m *Model) updateTable(cols []table.Column, rows []table.Row) {
 		m.FocusedCol = clampInt(m.FocusedCol, 0, len(m.TableCols)-1)
 	}
 
-	m.Table.SetRows(nil)
 	m.refreshTableColumns()
-	m.Table.SetRows(rows)
+	m.refreshTableRows()
 }
 
 func (m *Model) executeQuery() error {
@@ -123,6 +122,21 @@ func (m *Model) executeQuery() error {
 
 	m.updateTable(cols, rows)
 	return nil
+}
+
+func (m *Model) printErr(err error) {
+	m.updateTable(
+		[]table.Column{
+			{
+				Title: "Error",
+				Width: m.Table.Width(),
+			},
+		},
+		[]table.Row{
+			{err.Error()},
+		},
+	)
+
 }
 
 func (m *Model) resize() {
@@ -186,7 +200,7 @@ func (m *Model) resizeChildren() {
 	}
 }
 
-func fitColumns(cols []table.Column, rows []table.Row, availableWidth int, focusedCol int, columnMode bool) []table.Column {
+func fitColumns(cols []table.Column, rows []table.Row, availableWidth int, focusedCol int, columnMode bool, cellPaddingWidth int) []table.Column {
 	if len(cols) == 0 {
 		return nil
 	}
@@ -195,7 +209,7 @@ func fitColumns(cols []table.Column, rows []table.Row, availableWidth int, focus
 	ideal := make([]int, len(cols))
 	widths := make([]int, len(cols))
 
-	contentWidth := max(len(cols), availableWidth-len(cols)*tableCellPaddingWidth())
+	contentWidth := max(len(cols), availableWidth-len(cols)*cellPaddingWidth)
 
 	used := 0
 	for i, col := range cols {
@@ -338,9 +352,49 @@ func shrinkWidths(widths []int, ideal []int, floor int) bool {
 	return false
 }
 
-func tableCellPaddingWidth() int {
-	styles := table.DefaultStyles()
-	return max(styles.Header.GetHorizontalFrameSize(), styles.Cell.GetHorizontalFrameSize())
+func tableCellPaddingWidth(styles Styles) int {
+	return max(styles.TableHeader.GetHorizontalFrameSize(), styles.Cell.GetHorizontalFrameSize())
+}
+
+func cloneRows(rows []table.Row) []table.Row {
+	cloned := make([]table.Row, len(rows))
+	for i, row := range rows {
+		cloned[i] = append(table.Row(nil), row...)
+	}
+
+	return cloned
+}
+
+func (m *Model) refreshTableRows() {
+	if len(m.TableRows) == 0 {
+		m.Table.SetRows(nil)
+		return
+	}
+
+	rows := cloneRows(m.TableRows)
+	cursor := m.Table.Cursor()
+	highlightCell := m.Focus == FocusRows && m.ColumnMode
+
+	for i, row := range rows {
+		baseStyle := m.Styles.OddRow
+		if i%2 == 1 {
+			baseStyle = m.Styles.EvenRow
+		}
+
+		for j, value := range row {
+			style := baseStyle
+			if i == cursor {
+				style = lipgloss.NewStyle().Inherit(style).Inherit(m.Styles.SelectedRowStyle())
+			}
+			if highlightCell && i == cursor && j == m.FocusedCol {
+				style = lipgloss.NewStyle().Inherit(style).Inherit(m.Styles.SelectedCellStyle(m.Focus == FocusRows))
+			}
+
+			rows[i][j] = style.Render(value)
+		}
+	}
+
+	m.Table.SetRows(rows)
 }
 
 func (m *Model) refreshTableColumns() {
@@ -354,7 +408,7 @@ func (m *Model) refreshTableColumns() {
 		cols[m.FocusedCol].Title = "[" + cols[m.FocusedCol].Title + "]"
 	}
 
-	m.Table.SetColumns(fitColumns(cols, m.Table.Rows(), m.Table.Width(), m.FocusedCol, m.ColumnMode))
+	m.Table.SetColumns(fitColumns(cols, m.TableRows, m.Table.Width(), m.FocusedCol, m.ColumnMode, tableCellPaddingWidth(m.Styles)))
 }
 
 func (m *Model) moveFocusedColumn(delta int) {
@@ -369,6 +423,7 @@ func (m *Model) moveFocusedColumn(delta int) {
 
 	m.FocusedCol = next
 	m.refreshTableColumns()
+	m.refreshTableRows()
 }
 
 func (m *Model) syncFocus() {
@@ -394,6 +449,8 @@ func (m *Model) syncFocus() {
 	} else {
 		m.Table.Blur()
 	}
+
+	m.refreshTableRows()
 }
 
 func nextFocus(f FocusArea) FocusArea {
@@ -404,16 +461,5 @@ func nextFocus(f FocusArea) FocusArea {
 		return FocusRows
 	default:
 		return FocusSidebar
-	}
-}
-
-func prevFocus(f FocusArea) FocusArea {
-	switch f {
-	case FocusSidebar:
-		return FocusRows
-	case FocusInput:
-		return FocusSidebar
-	default:
-		return FocusInput
 	}
 }

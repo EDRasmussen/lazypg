@@ -29,6 +29,7 @@ type Model struct {
 	Input     textarea.Model
 	Table     table.Model
 	TableCols []table.Column
+	TableRows []table.Row
 
 	Focus      FocusArea
 	ColumnMode bool
@@ -39,8 +40,11 @@ type Model struct {
 }
 
 func InitialModel(sess *session.Session) Model {
+	styles := NewStyles()
+
 	input := textarea.New()
 	input.SetValue("SELECT * FROM users LIMIT 100;")
+	input.SetStyles(styles.InputStyles())
 	input.Focus()
 	input.ShowLineNumbers = true
 	input.DynamicHeight = true
@@ -49,9 +53,16 @@ func InitialModel(sess *session.Session) Model {
 	input.MaxContentHeight = 100_000 // should be enough
 
 	tbl := table.New()
+	tbl.SetStyles(styles.TableStyles())
 
-	sidebar := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	delegate := list.NewDefaultDelegate()
+	delegate.Styles = styles.SidebarItemStyles()
+
+	sidebar := list.New([]list.Item{}, delegate, 0, 0)
 	sidebar.Title = "lazypg"
+	sidebar.Styles = styles.SidebarStyles()
+	sidebar.SetShowStatusBar(false)
+	sidebar.SetShowHelp(false)
 
 	return Model{
 		Session: sess,
@@ -59,7 +70,7 @@ func InitialModel(sess *session.Session) Model {
 		Input:   input,
 		Table:   tbl,
 		Focus:   FocusInput,
-		Styles:  NewStyles(),
+		Styles:  styles,
 	}
 }
 
